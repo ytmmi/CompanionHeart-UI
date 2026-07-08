@@ -1,0 +1,78 @@
+# ── Logs ──
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ── Dependencies ──
+node_modules
+.pnpm-store/
+
+# ── Build output ──
+dist
+dist-ssr
+*.local
+
+# ── Tauri / Rust ──
+src-tauri/target/
+src-tauri/gen/android/app/build/
+src-tauri/gen/android/app/src/main/assets/
+src-tauri/gen/android/app/src/main/jniLibs/
+*.rs.bk
+Cargo.lock
+
+# ── 项目内 Android 工具链（本地 SDK/NDK/Gradle 缓存） ──
+android-sdk/
+.gradle/
+.gradle-cache/
+# android-build.ps1 脚本保留不忽略
+src-tauri/gen/schemas/
+
+# ── Environment ──
+.env
+.env.local
+.env.*.local
+
+# ── Test Components（测试组件，不提交） ──
+src/components/test/
+
+# ── Tests（测试文件夹与测试文件，不提交） ──
+tests/
+scripts/
+**/__tests__/
+**/*.test.*
+**/*.spec.*
+
+# ── Model files（Live2D 模型，体积大） ──
+public/live2d-models/
+
+# ── Duplicate / accidental files ──
+public/src/
+
+# ── Credentials（密钥，绝不提交） ──
+companionheart.keystore
+*.jks
+*.p12
+
+# ── Cache（各类缓存） ──
+.cache/
+.vite/
+*.tsbuildinfo
+
+# ── Build artifacts ──
+build_output.log
+*.tgz
+
+# ── Editor directories and files ──
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

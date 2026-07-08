@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "es6",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "experimentalDecorators": true,
+    "forceConsistentCasingInFileNames": true,
+    "rootDir": "..",
+    "outDir": "./dist",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "emitDecoratorMetadata": true,
+    "noImplicitAny": true,
+    "useUnknownInCatchVariables": true,
+    "ignoreDeprecations": "6.0"
+  },
+  "include": ["src/**/*.ts", "../Core/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}
