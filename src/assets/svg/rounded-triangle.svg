@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <!-- 带圆角的三角形（角朝上基准图形）：粗描边 + 圆角连接实现圆角 -->
+  <!-- fill/stroke 使用 currentColor，由使用方通过 CSS color 上色 -->
+  <polygon points="12,6 20,17.5 4,17.5" fill="currentColor" stroke="currentColor" stroke-width="5" stroke-linejoin="round" />
+</svg>

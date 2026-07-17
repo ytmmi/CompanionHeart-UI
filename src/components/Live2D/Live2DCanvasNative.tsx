@@ -767,8 +767,8 @@ export default function Live2DCanvas({
         ctrl.setMotion(config.idleMotionGroupName);
       }
 
-      // 7. 设置 ResizeObserver（rAF 防抖）
-      l2dLog(id, "INIT", "设置 ResizeObserver + rAF 防抖...");
+      // 7. 设置 ResizeObserver（rAF 去抖，每帧最多同步 resize 一次）
+      l2dLog(id, "INIT", "设置 ResizeObserver + rAF 去抖...");
       if (observerRef.current) {
         l2dLog(id, "INIT", "断开旧 ResizeObserver");
         observerRef.current.disconnect();
@@ -778,39 +778,40 @@ export default function Live2DCanvas({
       let lastResizeW = 0;
       let lastResizeH = 0;
       let lastResizeDpr = 0;
-      // 级联防护：resize 完成后 200ms 冷却期
-      let resizeCooldownUntil = 0;
+      /** 执行一次画布缓冲重建 + SDK resize（onResize 内部会同步重绘一帧，
+       *  避免空缓冲被合成造成闪烁；同尺寸时 _resizeCanvas 内部跳过重建） */
+      const doResize = () => {
+        if (gen !== generationRef.current) return;
+        const newCw = container.clientWidth;
+        const newCh = container.clientHeight;
+        if (newCw <= 0 || newCh <= 0) return;
+        const newDpr = window.devicePixelRatio || 1;
+        // 尺寸与 DPR 均无变化时跳过重绘
+        if (
+          newCw === lastResizeW &&
+          newCh === lastResizeH &&
+          newDpr === lastResizeDpr
+        ) {
+          return;
+        }
+        lastResizeW = newCw;
+        lastResizeH = newCh;
+        lastResizeDpr = newDpr;
+        // 缓冲重建统一交给 SDK 的 _resizeCanvas（内部有同尺寸跳过保护），
+        // 此处不再手动设置 canvas.width/height，避免每次 resize 双重重建缓冲
+        resizeNativeLive2D();
+      };
       const observer = new ResizeObserver(() => {
         if (gen !== generationRef.current) return;
-        // 冷却期：防止 resize→onResize→布局变化→resize 无限级联
-        if (performance.now() < resizeCooldownUntil) return;
-        // rAF 防抖：标记待处理，在下一帧统一执行
+        // rAF 去抖：合并同一帧内的多次回调，每帧最多 resize 一次。
+        // 每帧都跟随最新尺寸重建缓冲（而非节流跳帧），
+        // 否则缓冲宽高比与 CSS 显示尺寸不一致，模型会被拉伸。
         if (!resizePendingRef.current) {
           resizePendingRef.current = true;
           resizeRafRef.current = requestAnimationFrame(() => {
             resizeRafRef.current = null;
             resizePendingRef.current = false;
-            if (gen !== generationRef.current) return;
-            const newCw = container.clientWidth;
-            const newCh = container.clientHeight;
-            if (newCw <= 0 || newCh <= 0) return;
-            const newDpr = window.devicePixelRatio || 1;
-            // 尺寸与 DPR 均无变化时跳过重绘
-            if (
-              newCw === lastResizeW &&
-              newCh === lastResizeH &&
-              newDpr === lastResizeDpr
-            ) {
-              return;
-            }
-            lastResizeW = newCw;
-            lastResizeH = newCh;
-            lastResizeDpr = newDpr;
-            canvas.width = Math.round(newCw * newDpr);
-            canvas.height = Math.round(newCh * newDpr);
-            resizeNativeLive2D();
-            // 设置冷却期防止级联触发
-            resizeCooldownUntil = performance.now() + 200;
+            doResize();
           });
         }
       });

@@ -149,6 +149,21 @@ export class LAppDelegate {
           }
         }
       }
+
+      // 立即同步重渲染一帧：重设 canvas.width 会把绘图缓冲清空为透明，
+      // 若等待主循环的下一个 rAF 才重绘，浏览器会先合成一帧空白 → 闪烁。
+      // 在同一任务内立即渲染，保证空缓冲永远不会被呈现。
+      if (gl) {
+        LAppPal.updateTime(true);
+        gl.clearColor(0.0, 0.0, 0.0, 0.0);
+        gl.enable(gl.DEPTH_TEST);
+        gl.depthFunc(gl.LEQUAL);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        gl.clearDepth(1.0);
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        this._view.render();
+      }
     }
   }
 
@@ -479,8 +494,14 @@ export class LAppDelegate {
       console.warn("Canvas is null, skipping resize");
       return;
     }
-    canvas.width = canvas.clientWidth * window.devicePixelRatio;
-    canvas.height = canvas.clientHeight * window.devicePixelRatio;
+    const width = Math.round(canvas.clientWidth * window.devicePixelRatio);
+    const height = Math.round(canvas.clientHeight * window.devicePixelRatio);
+    // 尺寸未变化时跳过赋值：重设 width/height（即使值相同）会强制清空并
+    // 重新分配 WebGL 绘图缓冲，是 resize 卡顿的主要开销来源
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
     if (gl) {
       gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
     }
