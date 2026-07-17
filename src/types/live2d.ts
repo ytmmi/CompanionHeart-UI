@@ -51,7 +51,10 @@ export interface ModelInfo {
   emotionMap?: EmotionMap;
   /** 是否启用鼠标交互（默认 true） */
   pointerInteractive?: boolean;
-  /** 是否启用滚轮缩放模型（默认 false） */
+  /**
+   * @deprecated 已废弃。滚轮缩放改由全局开关 `live2dStore.wheelZoomEnabled` 控制
+   * （localStorage 持久化，默认开启），不再按模型配置。
+   */
   scrollToResize?: boolean;
   /** 点击区域 → 动作映射 */
   tapMotions?: Record<string, string>;

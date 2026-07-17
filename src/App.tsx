@@ -6,11 +6,28 @@ import PhoneHomePage from "./pages/PhoneHomePage";
 import TestLive2DPanel from "./components/test/TestLive2D/TestLive2DPanel";
 
 /**
- * 调试模式：直接以 TestLive2DPanel 为首页，排除路由干扰
- * 后续恢复为正式路由
+ * 根组件 — 按平台分组挂载首页
+ *
+ * - Group A（Win / Web / Android 平板）→ HomePage（左右分栏布局）
+ * - Group B（Android 手机）→ PhoneHomePage（窄屏触控布局）
+ * - #/testlive2d → TestLive2DPanel（Live2D 调试面板）
  */
 function App() {
-  return <TestLive2DPanel />;
+  const { isGroupB } = usePlatform();
+  const [hash, setHash] = useState(window.location.hash);
+
+  useEffect(() => {
+    const onHashChange = () => setHash(window.location.hash);
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+
+  // 调试路由：#/testlive2d → Live2D 测试面板
+  if (hash === "#/testlive2d") {
+    return <TestLive2DPanel />;
+  }
+
+  return isGroupB ? <PhoneHomePage /> : <HomePage />;
 }
 
 export default App;

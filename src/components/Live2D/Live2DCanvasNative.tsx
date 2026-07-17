@@ -25,6 +25,7 @@ import { LAppDelegate } from "../../cubism-sdk/src/lappdelegate";
 import { NativeLive2DController } from "./NativeLive2DController";
 import { LAppLive2DManager } from "../../cubism-sdk/src/lapplive2dmanager";
 import type { LAppModel } from "../../cubism-sdk/src/lappmodel";
+import { useLive2DStore } from "../../store/live2dStore";
 
 // ─── 全局类型声明 ───────────────────────────────────
 
@@ -47,6 +48,8 @@ const MODEL_POLL_INTERVAL_MS = 100;
 const DRAG_THRESHOLD_PX = 5;
 /** 拖拽灵敏度系数 */
 const DRAG_SENSITIVITY = 30;
+/** 长按判定时间（毫秒），按住超过此时长进入"拖动模型"模式 */
+const LONG_PRESS_MS = 300;
 
 // ─── 调试日志工具（本地持久化）───────────────────────
 
@@ -408,16 +411,14 @@ export default function Live2DCanvas({
   const resizePendingRef = useRef(false);
   /** 滚轮缩放动画 rAF ID */
   const scaleAnimRef = useRef<number | null>(null);
-  /** 滚轮缩放目标值 */
-  const targetScaleRef = useRef(config.kScale ?? 1.0);
+  /** 滚轮缩放目标值（视图缩放因子，1.0 = 原始大小） */
+  const targetScaleRef = useRef(1.0);
   /** 滚轮缩放当前值（用于平滑动画） */
-  const currentScaleRef = useRef(config.kScale ?? 1.0);
+  const currentScaleRef = useRef(1.0);
   /** 是否正在缩放动画中 */
   const isScaleAnimatingRef = useRef(false);
   /** 缩放缓动系数 */
   const SCALE_EASING = 0.3;
-  /** 每次滚轮缩放步长 */
-  const WHEEL_SCALE_STEP = 0.03;
   /** 最小缩放 */
   const MIN_SCALE = 0.1;
   /** 最大缩放 */
@@ -818,11 +819,15 @@ export default function Live2DCanvas({
       l2dLog(id, "INIT", "ResizeObserver 已创建并开始监听");
 
       // 7a. 设置滚轮缩放（参考 Open-LLM-VTuber 平滑缩放动画）
+      // 开关由 live2dStore.wheelZoomEnabled 控制（UI 可切换），
+      // 且仅当鼠标指针悬停在模型上（hit test 命中）时才缩放
       const handleWheel = (e: WheelEvent) => {
-        if (!config.scrollToResize) return;
+        if (!useLive2DStore.getState().wheelZoomEnabled) return;
+        if (hitTestModel(canvas, e.clientX, e.clientY) === null) return;
         e.preventDefault();
         const direction = e.deltaY > 0 ? -1 : 1;
-        const increment = WHEEL_SCALE_STEP * direction;
+        // 步长由 live2dStore.wheelZoomStep 控制（测试面板滑块可调）
+        const increment = useLive2DStore.getState().wheelZoomStep * direction;
         const currentActual = currentScaleRef.current;
         targetScaleRef.current = Math.max(
           MIN_SCALE,
@@ -958,6 +963,68 @@ export default function Live2DCanvas({
 }
 
 // ─── 工具函数 ─────────────────────────────────────────
+
+/**
+ * 使用 SDK 的 _deviceToScreen 进行屏幕坐标→模型坐标转换（参考 Open-LLM-VTuber）。
+ * 比手动 normalizeCoords 更准确，与 SDK 内部的 hit test 坐标系统一致。
+ */
+function screenToModelCoords(
+  canvas: HTMLCanvasElement,
+  clientX: number,
+  clientY: number,
+): { x: number; y: number } | null {
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return null;
+  const delegate = LAppDelegate.getInstance();
+  const view = delegate?.getView();
+  if (!view?._deviceToScreen) return null;
+  const scale = canvas.width / rect.width;
+  const sx = (clientX - rect.left) * scale;
+  const sy = (clientY - rect.top) * scale;
+  return {
+    x: view._deviceToScreen.transformX(sx),
+    y: view._deviceToScreen.transformY(sy),
+  };
+}
+
+/**
+ * 检测指定屏幕坐标是否命中模型（hit test，参考 Open-LLM-VTuber）。
+ * 返回命中的区域名称；模型未定义命中区域时兜底返回 "model"；未命中返回 null。
+ */
+function hitTestModel(
+  canvas: HTMLCanvasElement,
+  clientX: number,
+  clientY: number,
+): string | null {
+  const manager = LAppLive2DManager.getInstance();
+  const model = manager?.getModel(0);
+  if (!model) return null;
+  const modelCoords = screenToModelCoords(canvas, clientX, clientY);
+  if (!modelCoords) return null;
+  const areaName = (model as any).anyhitTest?.(modelCoords.x, modelCoords.y);
+  if (areaName != null) return areaName;
+  const isHit = (model as any).isHitOnModel?.(modelCoords.x, modelCoords.y);
+  return isHit ? "model" : null;
+}
+
+/**
+ * 按增量平移模型（长按拖动用）。
+ * dx/dy 为 _deviceToScreen 坐标系下的增量，与 hit test / tap 坐标系一致。
+ */
+function translateModelBy(dx: number, dy: number): void {
+  try {
+    const manager = LAppLive2DManager.getInstance();
+    const model = manager?.getModel(0);
+    if (!model) return;
+    // @ts-ignore - _modelMatrix 是 SDK 内部属性
+    const matrix = (model as any)._modelMatrix;
+    if (!matrix) return;
+    matrix.translateX(matrix.getTranslateX() + dx);
+    matrix.translateY(matrix.getTranslateY() + dy);
+  } catch {
+    // 模型尚未就绪时静默忽略
+  }
+}
 
 /**
  * 等待模型加载完成（带可取消的轮询定时器）
@@ -1215,8 +1282,9 @@ function setupDPRListener(
  * 支持（参考 Open-LLM-VTuber）：
  * - 鼠标移动 → 视线追踪（focus）
  * - 点击（移动距离 < 阈值）→ hit test + 命中检测（tap）
- * - 拖拽（移动距离 ≥ 阈值）→ 模型拖拽
- * - 触摸 → 移动端交互
+ * - 拖拽（移动距离 ≥ 阈值）→ 视线拖拽
+ * - 左键长按模型（≥ LONG_PRESS_MS）→ 拖动模型位置（开关：modelDragEnabled）
+ * - 触摸 → 移动端交互（长按同样支持拖动模型）
  * - 使用 _deviceToScreen 进行准确的坐标转换
  * - 鼠标/触摸结束 → 复位拖拽偏移
  */
@@ -1230,47 +1298,30 @@ function setupCanvasInteraction(
   let lastX = 0;
   let lastY = 0;
   let hasMoved = false;
+  /** 是否处于"拖动模型"模式（长按触发） */
+  let isModelDragMode = false;
+  /** 长按判定定时器 */
+  let longPressTimer: ReturnType<typeof setTimeout> | null = null;
 
-  /**
-   * 使用 SDK 的 _deviceToScreen 进行屏幕坐标→模型坐标转换（参考 Open-LLM-VTuber）。
-   * 比手动 normalizeCoords 更准确，与 SDK 内部的 hit test 坐标系统一致。
-   */
-  const screenToModel = (
-    clientX: number,
-    clientY: number,
-  ): { x: number; y: number } | null => {
-    const rect = canvas.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return null;
-    const delegate = LAppDelegate.getInstance();
-    const view = delegate?.getView();
-    if (!view?._deviceToScreen) return null;
-    const scale = canvas.width / rect.width;
-    const sx = (clientX - rect.left) * scale;
-    const sy = (clientY - rect.top) * scale;
-    return {
-      x: view._deviceToScreen.transformX(sx),
-      y: view._deviceToScreen.transformY(sy),
-    };
+  const clearLongPressTimer = () => {
+    if (longPressTimer !== null) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
   };
 
-  /**
-   * 检测指定屏幕坐标是否命中模型（hit test，参考 Open-LLM-VTuber）。
-   * 返回命中的区域名称，若未命中则返回 null。
-   */
-  const hitTest = (clientX: number, clientY: number): string | null => {
-    const manager = LAppLive2DManager.getInstance();
-    const model = manager?.getModel(0);
-    if (!model) return null;
-    const modelCoords = screenToModel(clientX, clientY);
-    if (!modelCoords) return null;
-    // @ts-ignore - anyhitTest 与 isHitOnModel 为 SDK 内部方法
-    const areaName = model.anyhitTest?.(modelCoords.x, modelCoords.y);
-    // @ts-ignore
-    if (areaName !== null) return areaName;
-    // @ts-ignore
-    const isHit = model.isHitOnModel?.(modelCoords.x, modelCoords.y);
-    return isHit ? "model" : null;
+  const exitModelDragMode = () => {
+    if (isModelDragMode) {
+      isModelDragMode = false;
+      canvas.style.cursor = "";
+    }
   };
+
+  const screenToModel = (clientX: number, clientY: number) =>
+    screenToModelCoords(canvas, clientX, clientY);
+
+  const hitTest = (clientX: number, clientY: number): string | null =>
+    hitTestModel(canvas, clientX, clientY);
 
   /**
    * 将 DOM 坐标归一化到 Cubism 坐标系（-1 ~ 1）
@@ -1298,6 +1349,18 @@ function setupCanvasInteraction(
   };
 
   const handleMove = (clientX: number, clientY: number) => {
+    // ── 拖动模型模式：按增量平移模型矩阵，不做视线追踪 ──
+    if (isModelDragMode) {
+      const prev = screenToModel(lastX, lastY);
+      const curr = screenToModel(clientX, clientY);
+      lastX = clientX;
+      lastY = clientY;
+      if (prev && curr) {
+        translateModelBy(curr.x - prev.x, curr.y - prev.y);
+      }
+      return;
+    }
+
     const { x, y } = normalizeCoords(clientX, clientY);
     ctrl.focus(x, y);
 
@@ -1306,6 +1369,8 @@ function setupCanvasInteraction(
       const deltaY = clientY - dragStartY;
       if (!hasMoved && Math.hypot(deltaX, deltaY) >= DRAG_THRESHOLD_PX) {
         hasMoved = true;
+        // 移动超过阈值 → 判定为普通拖拽，取消长按拖动模型
+        clearLongPressTimer();
       }
       if (hasMoved) {
         const { dx, dy } = getDragDelta(clientX, clientY);
@@ -1328,9 +1393,34 @@ function setupCanvasInteraction(
     dragStartY = clientY;
     lastX = clientX;
     lastY = clientY;
+
+    // ── 长按判定：按住不动超过 LONG_PRESS_MS 且命中模型 → 进入拖动模型模式 ──
+    clearLongPressTimer();
+    if (
+      useLive2DStore.getState().modelDragEnabled &&
+      hitTest(clientX, clientY) !== null
+    ) {
+      longPressTimer = setTimeout(() => {
+        longPressTimer = null;
+        // 已移动（普通拖拽）或已松开时不进入
+        if (!isDragging || hasMoved) return;
+        isModelDragMode = true;
+        canvas.style.cursor = "grabbing";
+        // 复位视线偏移，避免拖动模型时视线残留
+        const manager = LAppLive2DManager.getInstance();
+        if (manager) manager.onDrag(0, 0);
+      }, LONG_PRESS_MS);
+    }
   };
 
   const handleUp = (clientX: number, clientY: number) => {
+    clearLongPressTimer();
+    if (isModelDragMode) {
+      exitModelDragMode();
+      isDragging = false;
+      hasMoved = false;
+      return;
+    }
     if (!isDragging) return;
     if (!hasMoved) {
       // 点击前先做 hit test（参考 Open-LLM-VTuber），仅命中模型时触发 tap
@@ -1357,9 +1447,18 @@ function setupCanvasInteraction(
   // ── 鼠标事件 ──
 
   const onMouseMove = (e: MouseEvent) => handleMove(e.clientX, e.clientY);
-  const onMouseDown = (e: MouseEvent) => handleDown(e.clientX, e.clientY);
-  const onMouseUp = (e: MouseEvent) => handleUp(e.clientX, e.clientY);
+  const onMouseDown = (e: MouseEvent) => {
+    // 仅左键触发拖拽/长按逻辑
+    if (e.button !== 0) return;
+    handleDown(e.clientX, e.clientY);
+  };
+  const onMouseUp = (e: MouseEvent) => {
+    if (e.button !== 0) return;
+    handleUp(e.clientX, e.clientY);
+  };
   const onMouseLeave = () => {
+    clearLongPressTimer();
+    exitModelDragMode();
     isDragging = false;
     hasMoved = false;
     const manager = LAppLive2DManager.getInstance();
@@ -1372,8 +1471,8 @@ function setupCanvasInteraction(
     if (e.touches.length === 0) return;
     const t = e.touches[0];
     handleMove(t.clientX, t.clientY);
-    // 仅在拖拽判定生效后阻止默认行为，避免阻断页面滚动
-    if (isDragging && hasMoved) {
+    // 拖动模型模式或拖拽判定生效后阻止默认行为，避免阻断页面滚动
+    if (isModelDragMode || (isDragging && hasMoved)) {
       e.preventDefault();
     }
   };
@@ -1389,11 +1488,17 @@ function setupCanvasInteraction(
   const onTouchEnd = (e: TouchEvent) => {
     const t = e.changedTouches[0];
     if (t) handleUp(t.clientX, t.clientY);
+    else {
+      clearLongPressTimer();
+      exitModelDragMode();
+    }
     const manager = LAppLive2DManager.getInstance();
     if (manager) manager.onDrag(0, 0);
   };
 
   const onTouchCancel = () => {
+    clearLongPressTimer();
+    exitModelDragMode();
     isDragging = false;
     hasMoved = false;
     const manager = LAppLive2DManager.getInstance();
@@ -1413,6 +1518,8 @@ function setupCanvasInteraction(
   canvas.addEventListener("touchcancel", onTouchCancel, { passive: true });
 
   return () => {
+    clearLongPressTimer();
+    exitModelDragMode();
     try {
       canvas.removeEventListener("mousemove", onMouseMove);
       canvas.removeEventListener("mousedown", onMouseDown);
@@ -1431,7 +1538,14 @@ function setupCanvasInteraction(
 /**
  * 应用模型缩放（参考 Open-LLM-VTuber 的 applyScale 实现）。
  * 通过直接操作模型的变换矩阵实现缩放，不经过 View 矩阵。
+ *
+ * ⚠️ CubismModelMatrix.scale() 是"设置绝对值"语义，会覆盖模型加载时
+ *    setupFromLayout/setHeight 计算的初始缩放。因此首次调用时记录该模型的
+ *    基准缩放，之后按 baseScale * scale 设置，scale=1.0 即恢复原始大小。
+ *    scale() 不修改平移分量，模型会围绕自身原点原地缩放（拖动后位置不漂移）。
  */
+const modelBaseScaleMap = new WeakMap<object, number>();
+
 function applyModelScale(scale: number): void {
   try {
     const manager = LAppLive2DManager.getInstance();
@@ -1439,7 +1553,17 @@ function applyModelScale(scale: number): void {
     const model = manager.getModel(0);
     if (!model) return;
     // @ts-ignore - _modelMatrix 是 SDK 内部属性
-    model._modelMatrix?.scale?.(scale, scale);
+    const matrix = (model as any)._modelMatrix;
+    if (!matrix) return;
+
+    let baseScale = modelBaseScaleMap.get(model as object);
+    if (baseScale === undefined) {
+      baseScale = matrix.getScaleX() || 1.0;
+      modelBaseScaleMap.set(model as object, baseScale as number);
+    }
+
+    const newScale = (baseScale as number) * scale;
+    matrix.scale(newScale, newScale);
   } catch {
     // 模型尚未就绪时静默忽略
   }
