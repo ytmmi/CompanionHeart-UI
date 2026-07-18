@@ -3,7 +3,8 @@
  */
 
 // 后端地址，默认从环境变量读取或使用本地开发地址
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:18000";
+// （后端标准启动端口为 8000，见后端文档；如需其他端口用 VITE_API_BASE_URL 覆盖）
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8000";
 
 /** 聊天消息 */
 export interface ChatMessage {

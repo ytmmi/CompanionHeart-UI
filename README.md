@@ -24,11 +24,17 @@ src/
 │   └── PhoneHomePage.tsx  # 📱 手机首页（Group B：Android 手机，窄屏触控布局）
 ├── components/
 │   ├── Chat/
-│   │   └── ChatHistory.tsx # 聊天记录面板（左栏，10vw 宽）
+│   │   ├── ChatHistory.tsx    # 聊天记录面板（左栏，10vw 宽）
+│   │   ├── ChatContainer.tsx  # 🟢 聊天输入容器（输入框 + 发送，接 chatStore 发送管线）
+│   │   ├── MicButton.tsx      # 话筒按钮（UI 占位）
+│   │   └── MoreButton.tsx     # 更多按钮（UI 占位）
 │   ├── Live2D/
-│   │   ├── BackgroundPanel.tsx        # 背景面板（isolation:isolate 层叠上下文）
+│   │   ├── BackgroundPanel.tsx        # 背景面板（isolation:isolate 层叠上下文 + 气泡叠加层）
 │   │   ├── Live2DCanvasNative.tsx      # 🟢 Live2D 画布组件（原生 Cubism SDK，含长按拖动/滚轮缩放）
 │   │   ├── NativeLive2DController.ts   # 🟢 原生 SDK 控制器（表情/动作/口型/视线）
+│   │   ├── SpeechBubble.tsx            # 气泡样式控件（磨砂半透明，大小自适应文字）
+│   │   ├── ModelBubbleOverlay.tsx      # 🟢 气泡定位层（跟随模型、画布内钳制、淡出销毁）
+│   │   ├── live2dModelRect.ts          # 🟢 模型可视矩形计算（MVP 矩阵 → CSS 像素）
 │   │   └── useLive2D.ts                # 控制器生命周期 Hook
 │   ├── Voice/             # 语音相关（待实现）
 │   ├── Settings/          # 设置相关（待实现）
@@ -56,8 +62,10 @@ src/
 │       ├── universal.ts   #   万能自定义模型（23纹理/38表情/3动作）
 │       ├── akari.ts       #   🟢 akari 模型配置（当前默认，VTube Studio, 1纹理/4表情/3动作）
 │       └── moran.ts       #   moran 模型配置（VTube Studio, 4纹理/9表情/无动作）
-├── services/              # API 通信服务（apiClient）
-├── store/                 # Zustand 状态管理（live2dStore：表情/动作/口型 + 交互开关）
+├── services/              # API 通信服务（apiClient，默认后端 http://127.0.0.1:8000）
+├── store/                 # Zustand 状态管理
+│   ├── live2dStore.ts     #   Live2D：表情/动作/口型 + 交互开关
+│   └── chatStore.ts       #   🟢 聊天：发送管线（LLM→TTS→气泡打字机与语音同步）
 ├── types/                 # TypeScript 类型定义（live2d）
 ├── utils/                 # 工具函数（audioUtils, textCleaner）
 └── assets/                # 静态资源
@@ -104,8 +112,53 @@ public/
 BackgroundPanel (flex:1, 100vh, transparent)
 ├── <img> 房间背景图 (position:absolute, 底层)
 └── <div> Live2D 层 (position:absolute, inset:0, 顶层)
-    └── Live2DCanvas (100%×100%, 全透明画布)
+    ├── Live2DCanvas (100%×100%, 全透明画布)
+    └── ModelBubbleOverlay (气泡叠加层, pointer-events:none)
 ```
+
+## 聊天发送管线（文字 + 语音同步）
+
+正式聊天链路已接通：`ChatContainer` 输入框输入 → 发送（回车 / 按钮）→ `chatStore.sendMessage` → 后端 LLM + TTS → Live2D 气泡文字与语音同步播放。
+
+```
+ChatContainer（输入/发送，Shift+Enter 换行）
+  ↓ sendMessage(text)
+chatStore（zustand，src/store/chatStore.ts）
+  ├── 1. POST /api/llm/chat        → 完整回复文本（上下文取最近 10 条）
+  ├── 2. cleanTextForTTS(reply)     → 过滤 Markdown/思考内容/emoji 后
+  │      POST /api/voice/tts        → MP3 音频 Blob（失败则退化为纯文字）
+  └── 3. 同步播放：解码音频取时长 → 打字机速度 = 时长/字数（钳 15~200ms）
+         打字机与音频同时启动，语音结束补全文字
+  ↓ bubbleText / bubbleClosing
+BackgroundPanel → ModelBubbleOverlay → SpeechBubble（气泡显示）
+```
+
+### 长回复分段
+
+回复按句末标点切句、拼装成段（每段 ≤ `MAX_SEGMENT_CHARS` = 60 字符，超长单句硬切）。打字机按全文连续推进，气泡每次只显示当前段已揭示的部分，前一段显示完自动切换下一段，整体节奏仍与语音时长对齐。
+
+### 气泡生命周期
+
+文字全部显示完 → 停留 3s（`BUBBLE_DISMISS_DELAY_MS`）→ 透明度 1→0 淡出 1s（`BUBBLE_FADE_MS`，CSS transition）→ 清空销毁。期间用户发新消息会取消销毁、复用气泡。LLM 报错的错误气泡走同样流程。
+
+### 气泡定位（ModelBubbleOverlay + live2dModelRect）
+
+- `live2dModelRect.getModelScreenRect()` 复刻 SDK 的 MVP 矩阵构造（projection × view × modelMatrix），把模型空间包围盒（遍历可见 drawable 顶点，500ms 缓存）变换为画布 CSS 像素矩形——模型拖动/缩放/窗口 resize 后气泡位置都正确跟随
+- 水平与模型矩形中心对齐；垂直气泡中心在模型高度 60% 处（`BUBBLE_ANCHOR_RATIO`，中间偏下）
+- 最终位置钳制在画布内（8px 边距）：模型部分移出画布边缘时气泡贴边不越界；气泡 maxWidth 额外受画布宽度收窄
+- rAF 每帧直接写 transform 定位，不走 React 渲染循环
+
+### 可调常量（src/store/chatStore.ts 顶部）
+
+| 常量                      | 默认 | 说明                       |
+| ------------------------- | ---- | -------------------------- |
+| `MAX_SEGMENT_CHARS`       | 60   | 气泡单段最大字符数         |
+| `BUBBLE_DISMISS_DELAY_MS` | 3000 | 文字结束到开始销毁的停留   |
+| `BUBBLE_FADE_MS`          | 1000 | 淡出动画时长（组件同引用） |
+| `MAX_CONTEXT_MESSAGES`    | 10   | LLM 上下文条数             |
+| `MIN/MAX_TYPE_SPEED_MS`   | 15/200 | 打字机速度钳制范围       |
+
+`ModelBubbleOverlay.tsx` 内：`BUBBLE_ANCHOR_RATIO`（垂直锚点 0.6）、`EDGE_PADDING`（画布边距 8px）。
 
 ## Live2D
 
@@ -183,8 +236,13 @@ requestAnimationFrame 渲染循环
 | `src/config/live2d/配置规则.md`                   | 📄 模型配置文件编写规范                           |
 | `src/components/Live2D/Live2DCanvasNative.tsx`    | 🟢 原生 Cubism SDK 画布组件（当前使用，含长按拖动/滚轮缩放） |
 | `src/components/Live2D/NativeLive2DController.ts` | 🟢 原生 SDK 控制器（表情/动作/口型同步/参数读写） |
-| `src/components/Live2D/BackgroundPanel.tsx`       | 背景面板（房间背景图 + Live2D 叠加）              |
+| `src/components/Live2D/BackgroundPanel.tsx`       | 背景面板（房间背景图 + Live2D + 气泡叠加层）      |
+| `src/components/Live2D/SpeechBubble.tsx`          | 气泡样式控件（磨砂半透明，自适应文字）            |
+| `src/components/Live2D/ModelBubbleOverlay.tsx`    | 🟢 气泡定位层（跟随模型/画布钳制/淡出销毁）       |
+| `src/components/Live2D/live2dModelRect.ts`        | 🟢 模型可视矩形计算（MVP 矩阵 → CSS 像素）        |
+| `src/components/Chat/ChatContainer.tsx`           | 🟢 聊天输入容器（发送 → chatStore 管线）          |
 | `src/store/live2dStore.ts`                        | Zustand 状态（表情/动作/口型 + 拖动/缩放开关持久化） |
+| `src/store/chatStore.ts`                          | 🟢 聊天状态与发送管线（LLM→TTS→气泡同步/分段/销毁） |
 | `src/cubism-sdk/src/initLive2D.ts`                | SDK 初始化入口                                    |
 | `src/cubism-sdk/src/lappdelegate.ts`              | 应用主类（渲染循环管理、pause/resume API）        |
 | `src/cubism-sdk/src/lappglmanager.ts`             | WebGL 上下文管理（canvas 注入）                   |
@@ -268,3 +326,9 @@ pnpm preview        # 预览构建产物
 cd ../CompanionHeart-Backend
 uvicorn app.main:app --reload --port 8000
 ```
+
+前端默认连接 `http://127.0.0.1:8000`（`src/services/apiClient.ts`），如后端跑在其他端口，启动前端时设置 `VITE_API_BASE_URL` 覆盖。
+
+### TTS 文本清理（textCleaner）
+
+发送给 TTS 的文本经 `cleanTextForTTS` 过滤，避免朗读无意义符号：思考/推理标签块、Markdown 符号（标题/加粗/代码块/链接/表格等）、URL、**emoji 表情**（`\p{Extended_Pictographic}` + 变体选择符/肤色修饰符/ZWJ/国旗/keycap）。气泡与聊天记录显示原始回复，不受过滤影响。

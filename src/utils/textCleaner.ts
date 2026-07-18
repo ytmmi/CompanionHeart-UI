@@ -10,7 +10,8 @@
  * 2. 移除 Markdown 符号（*, #, `, _, ~, >, -, |, --- 等）
  * 3. 移除代码块（``` ... ```）
  * 4. 移除 URL
- * 5. 压缩多余空白
+ * 5. 移除 Emoji 表情（TTS 不朗读）
+ * 6. 压缩多余空白
  */
 export function cleanTextForTTS(text: string): string {
   if (!text) return text;
@@ -61,12 +62,21 @@ export function cleanTextForTTS(text: string): string {
   // 11. 移除 URL
   cleaned = cleaned.replace(/https?:\/\/[^\s]+/g, "");
 
-  // 12. 压缩多余空白
+  // 12. 移除 Emoji 表情（TTS 不朗读）
+  //     \p{Extended_Pictographic} 覆盖绝大多数 emoji（😊🎉❤️ 等），
+  //     再补充变体选择符、肤色修饰符、ZWJ（组合 emoji 的连接符）、
+  //     区域指示符（国旗）和 keycap 组合（1️⃣ 等）
+  cleaned = cleaned.replace(
+    /[\p{Extended_Pictographic}\u{FE0E}\u{FE0F}\u{1F3FB}-\u{1F3FF}\u{200D}\u{1F1E6}-\u{1F1FF}\u{20E3}]/gu,
+    "",
+  );
+
+  // 13. 压缩多余空白
   cleaned = cleaned.replace(/\n{3,}/g, "\n\n");
   cleaned = cleaned.replace(/ {2,}/g, " ");
   cleaned = cleaned.trim();
 
-  // 13. 如果清理后为空，返回原始文本的简化版
+  // 14. 如果清理后为空，返回原始文本的简化版
   if (!cleaned) {
     // 只保留中英文和基本标点
     const fallback = text.replace(

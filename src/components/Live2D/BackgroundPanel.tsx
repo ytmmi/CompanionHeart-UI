@@ -3,8 +3,10 @@
 
 import React from "react";
 import Live2DCanvas from "./Live2DCanvasNative";
+import ModelBubbleOverlay from "./ModelBubbleOverlay";
 import type { ModelInfo } from "../../types/live2d";
 import { DEFAULT_MODEL_INFO } from "../../config/live2d";
+import { useChatStore } from "../../store/chatStore";
 
 const styles: Record<string, React.CSSProperties> = {
   container: {
@@ -48,6 +50,11 @@ const modelConfig: ModelInfo = {
 };
 
 const BackgroundPanel: React.FC = () => {
+  /** 模型回复气泡文字（由聊天发送管线驱动） */
+  const bubbleText = useChatStore((s) => s.bubbleText);
+  /** 气泡是否处于淡出销毁动画中 */
+  const bubbleClosing = useChatStore((s) => s.bubbleClosing);
+
   return (
     <div style={styles.container}>
       <img
@@ -60,6 +67,11 @@ const BackgroundPanel: React.FC = () => {
           width="100%"
           height="100%"
           modelInfo={modelConfig}
+        />
+        {/* 模型回复气泡：与模型居中对齐，模型贴边时钳制在画布内 */}
+        <ModelBubbleOverlay
+          text={bubbleText}
+          closing={bubbleClosing}
         />
       </div>
     </div>

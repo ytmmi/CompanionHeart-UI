@@ -4,12 +4,15 @@
 //   第二层：占位层（空）
 //   第三层：输入控件层（输入框、发送等，内部从左到右排列）
 //     └ 左侧控件列：话筒（上）+ 更多（下），纵向排列
-// 本组件只负责布局骨架，不含业务逻辑
+// 发送逻辑：输入文字 → 点击发送/回车 → chatStore.sendMessage
+//   （LLM 对话 → TTS 合成 → Live2D 气泡文字与语音同步播放）
 
 import React, { useState } from "react";
 import RoundedTriangle from "../Common/RoundedTriangle";
 import MicButton from "./MicButton";
 import MoreButton from "./MoreButton";
+import { useChatStore } from "../../store/chatStore";
+import { initAudio } from "../../utils/audioUtils";
 
 /** 顶部展开/收缩栏高度（px），供使用方计算收缩后的容器高度 */
 export const CHAT_TOGGLE_BAR_HEIGHT = 15;
@@ -86,7 +89,7 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#fff",
     boxSizing: "border-box",
   },
-  // 发送按钮 — 长方形宽高比 21:10（缩放 2/3），圆角，底部与输入框底部对齐（暂无实际功能）
+  // 发送按钮 — 长方形宽高比 21:10（缩放 2/3），圆角，底部与输入框底部对齐
   sendBtn: {
     alignSelf: "flex-end",
     width: 50.4,
@@ -102,6 +105,11 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
     flexShrink: 0,
   },
+  // 发送按钮 — 可发送（有内容且空闲）时高亮
+  sendBtnActive: {
+    backgroundColor: "#4A90D9",
+    color: "#fff",
+  },
 };
 
 const ChatContainer: React.FC<ChatContainerProps> = ({
@@ -115,10 +123,35 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   /** 话筒开关（仅 UI 状态切换，实际功能待开发） */
   const [micOn, setMicOn] = useState(false);
 
+  /** 输入框内容 */
+  const [inputText, setInputText] = useState("");
+
+  const sendMessage = useChatStore((s) => s.sendMessage);
+  const phase = useChatStore((s) => s.phase);
+  const canSend = phase === "idle" && inputText.trim().length > 0;
+
   const handleToggle = () => {
     const next = !isExpanded;
     if (expanded === undefined) setInnerExpanded(next);
     onToggleExpand?.(next);
+  };
+
+  /** 发送：清空输入框，交给 chatStore 走 LLM → TTS → 气泡同步播放 */
+  const handleSend = () => {
+    if (!canSend) return;
+    // 用户点击即交互事件，趁机唤醒 AudioContext（浏览器自动播放策略）
+    initAudio();
+    const text = inputText;
+    setInputText("");
+    void sendMessage(text);
+  };
+
+  /** 回车发送（Shift+Enter 换行） */
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
   };
 
   return (
@@ -146,15 +179,24 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
           />
           <MoreButton />
         </div>
-        {/* 输入框（暂无实际功能） */}
+        {/* 输入框 */}
         <textarea
           style={styles.input}
-          placeholder="输入消息..."
+          placeholder={phase === "idle" ? "输入消息..." : "回复中..."}
+          value={inputText}
+          onChange={(e) => setInputText(e.target.value)}
+          onKeyDown={handleKeyDown}
         />
-        {/* 发送按钮（暂无实际功能） */}
+        {/* 发送按钮 */}
         <button
           type="button"
-          style={styles.sendBtn}
+          style={{
+            ...styles.sendBtn,
+            ...(canSend ? styles.sendBtnActive : null),
+            cursor: canSend ? "pointer" : "default",
+          }}
+          onClick={handleSend}
+          disabled={!canSend}
         >
           发送
         </button>
