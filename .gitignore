@@ -49,6 +49,11 @@ scripts/
 # ── Model files（Live2D 模型，体积大） ──
 public/live2d-models/
 
+# ── Plugins（插件目录，不提交） ──
+custom_plugin/
+plugins/
+src/plugins/
+
 # ── Duplicate / accidental files ──
 public/src/
 
