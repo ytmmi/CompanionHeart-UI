@@ -4,9 +4,13 @@
  * 连接聊天框（ChatContainer 输入/发送）与 Live2D 气泡（ModelBubbleOverlay 显示）：
  *   sendMessage → LLM 对话 → TTS 合成 → 文字（气泡打字机）与语音同步播放
  *
- * 同步策略（与 TestChatWindow.playSynced 一致）：
- *   解码音频获得时长 → 每字符间隔 = 时长 / 字数（钳制 15~200ms）→
- *   打字机与音频同时启动，语音结束时补全文字
+ * 同步策略：
+ *   默认句子级同步流式（/api/voice/tts/stream/sentences，NDJSON）：
+ *     每句的文本与音频成对到达进入队列，播放某句音频时才按该句真实时长
+ *     揭示对应文字——语音永远与文字严格同句，音频未到不提前打字；
+ *   引擎不支持（501/失败）时回退非流式：
+ *     解码音频获得时长 → 每字符间隔 = 时长 / 字数（钳制 15~200ms）→
+ *     打字机与音频同时启动，语音结束时补全文字
  *
  * 分段显示：过长回复按句子切分为多段（每段 ≤ MAX_SEGMENT_CHARS），
  *   打字机跨全文连续推进，气泡每次只显示当前段已揭示的部分，
@@ -18,10 +22,19 @@
  */
 
 import { create } from "zustand";
-import { chat, synthesizeSpeech } from "../services/apiClient";
+import {
+  chat,
+  synthesizeSpeech,
+  synthesizeSpeechSentences,
+} from "../services/apiClient";
 import type { ChatMessage } from "../services/apiClient";
 import { cleanTextForTTS } from "../utils/textCleaner";
-import { playAudioBlob, stopAudio } from "../utils/audioUtils";
+import {
+  playAudioBlob,
+  playPcm,
+  base64ToUint8,
+  stopAudio,
+} from "../utils/audioUtils";
 
 /** 发送管线阶段 */
 export type ChatPhase = "idle" | "thinking" | "speaking";
@@ -138,6 +151,37 @@ function startTypewriter(
   }, speedMs);
 }
 
+/**
+ * 句子 tween 打字机：在 durationMs 内把揭示字符数从 from 匀速推进到 to。
+ * 用于句子级同步——每句音频开始播放时启动，与该句时长严格对齐。
+ */
+let adaptiveTimer: ReturnType<typeof setInterval> | null = null;
+
+function stopAdaptiveTypewriter(): void {
+  if (adaptiveTimer !== null) {
+    clearInterval(adaptiveTimer);
+    adaptiveTimer = null;
+  }
+}
+
+function tweenTypewriter(
+  from: number,
+  to: number,
+  durationMs: number,
+  onTick: (count: number) => void,
+): void {
+  stopAdaptiveTypewriter();
+  const chars = to - from;
+  if (chars <= 0) return;
+  const start = performance.now();
+  onTick(from);
+  adaptiveTimer = setInterval(() => {
+    const frac = Math.min(1, (performance.now() - start) / Math.max(1, durationMs));
+    onTick(from + Math.round(chars * frac));
+    if (frac >= 1) stopAdaptiveTypewriter();
+  }, 33);
+}
+
 // ─── 气泡销毁定时器（停留 → 淡出 → 清空） ───────────────
 
 let dismissTimer: ReturnType<typeof setTimeout> | null = null;
@@ -199,6 +243,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!trimmed || get().phase !== "idle") return;
 
     stopTypewriter();
+    stopAdaptiveTypewriter();
     stopAudio();
     cancelBubbleDismiss();
 
@@ -245,58 +290,132 @@ export const useChatStore = create<ChatState>((set, get) => ({
       messages: [...s.messages, { role: "assistant", content: reply }],
     }));
 
-    // 2. TTS 合成（清理 Markdown/思考内容后发送；失败则退化为纯文字显示）
-    let audioBlob: Blob | null = null;
-    try {
-      audioBlob = await synthesizeSpeech(cleanTextForTTS(reply));
-    } catch (err) {
-      console.warn("[chatStore] TTS 合成失败，仅显示文字:", err);
-    }
-
-    // 3. 文字 + 语音同步输出（长回复分段轮播）
+    // 2. TTS + 文字同步输出（长回复分段轮播）
+    //    默认句子级同步流式：每句文本+音频成对到达，播到哪句显示到哪句；
+    //    引擎不支持（HTTP 501 / 空流 / 异常）时回退非流式路径。
     const segments = splitIntoSegments(reply);
     const displayAt = makeSegmentDisplay(segments);
     const lastSegment = segments[segments.length - 1].trimStart();
 
     set({ phase: "speaking", bubbleText: "" });
 
-    if (audioBlob) {
-      const durationMs = await getAudioDurationMs(audioBlob);
-      const speedMs = durationMs
-        ? Math.max(
-            MIN_TYPE_SPEED_MS,
-            Math.min(MAX_TYPE_SPEED_MS, durationMs / Math.max(1, reply.length)),
-          )
-        : FALLBACK_TYPE_SPEED_MS;
-
-      startTypewriter(reply.length, speedMs, (count) =>
-        set({ bubbleText: displayAt(count) }),
-      );
-      try {
-        await playAudioBlob(audioBlob);
-      } catch (err) {
-        console.warn("[chatStore] 语音播放失败:", err);
-      }
-      // 语音结束（或播放失败）→ 补全末段文字并结束
+    const finishSpeaking = () => {
       stopTypewriter();
+      stopAdaptiveTypewriter();
       set({ bubbleText: lastSegment, phase: "idle" });
       scheduleBubbleDismiss();
-    } else {
-      // 无语音：按固定速度逐字显示，显示完毕即结束
-      startTypewriter(
-        reply.length,
-        FALLBACK_TYPE_SPEED_MS,
-        (count) => set({ bubbleText: displayAt(count) }),
-        () => {
-          set({ phase: "idle" });
-          scheduleBubbleDismiss();
-        },
-      );
+    };
+
+    /** 非流式回退：完整合成 → 按时长匀速打字 → 播放 */
+    const fallbackNonStreaming = async () => {
+      let audioBlob: Blob | null = null;
+      try {
+        audioBlob = await synthesizeSpeech(cleanTextForTTS(reply));
+      } catch (err) {
+        console.warn("[chatStore] TTS 合成失败，仅显示文字:", err);
+      }
+
+      if (audioBlob) {
+        const durationMs = await getAudioDurationMs(audioBlob);
+        const speedMs = durationMs
+          ? Math.max(
+              MIN_TYPE_SPEED_MS,
+              Math.min(
+                MAX_TYPE_SPEED_MS,
+                durationMs / Math.max(1, reply.length),
+              ),
+            )
+          : FALLBACK_TYPE_SPEED_MS;
+
+        startTypewriter(reply.length, speedMs, (count) =>
+          set({ bubbleText: displayAt(count) }),
+        );
+        try {
+          await playAudioBlob(audioBlob);
+        } catch (err) {
+          console.warn("[chatStore] 语音播放失败:", err);
+        }
+        finishSpeaking();
+      } else {
+        // 无语音：按固定速度逐字显示
+        startTypewriter(
+          reply.length,
+          FALLBACK_TYPE_SPEED_MS,
+          (count) => set({ bubbleText: displayAt(count) }),
+          () => {
+            set({ phase: "idle" });
+            scheduleBubbleDismiss();
+          },
+        );
+      }
+    };
+
+    try {
+      // ── 句子级同步队列：文本与音频成对到达，播到哪句显示到哪句 ──
+      const { stream } = synthesizeSpeechSentences(cleanTextForTTS(reply));
+      const reader = stream.getReader();
+
+      // TTS 句子基于清理后的文本，映射回原文位置：
+      // 优先在原文中顺序查找句子内容；找不到则按累计字数比例推进
+      let searchFrom = 0;
+      let cleanedChars = 0;
+      const cleanedTotal = Math.max(1, cleanTextForTTS(reply).length);
+      let revealed = 0;
+
+      const targetFor = (sentence: string): number => {
+        cleanedChars += sentence.length;
+        const idx = reply.indexOf(sentence, searchFrom);
+        if (idx >= 0) {
+          searchFrom = idx + sentence.length;
+          return idx + sentence.length;
+        }
+        // 清理导致原文不含该句：按清理文本占比映射到原文长度
+        return Math.min(
+          reply.length,
+          Math.round((cleanedChars / cleanedTotal) * reply.length),
+        );
+      };
+
+      let played = 0;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!value) continue;
+
+          // 播放该句音频，同时把文字从当前进度 tween 到该句末尾
+          const target = targetFor(value.text);
+          tweenTypewriter(revealed, target, value.duration_ms, (count) => {
+            revealed = count;
+            set({ bubbleText: displayAt(count) });
+          });
+          await playPcm(base64ToUint8(value.audio));
+          // 该句播完：文字对齐到句末（tween 可能因取整差一两个字符）
+          stopAdaptiveTypewriter();
+          revealed = target;
+          set({ bubbleText: displayAt(target) });
+          played++;
+        }
+      } finally {
+        reader.releaseLock();
+      }
+
+      if (played === 0) {
+        // 引擎没产出任何句子（异常空流）：回退
+        await fallbackNonStreaming();
+        return;
+      }
+      finishSpeaking();
+    } catch (err) {
+      console.warn("[chatStore] 句子级同步 TTS 失败，回退非流式:", err);
+      stopAdaptiveTypewriter();
+      await fallbackNonStreaming();
     }
   },
 
   clearBubble: () => {
     stopTypewriter();
+    stopAdaptiveTypewriter();
     cancelBubbleDismiss();
     set({ bubbleText: "", bubbleClosing: false });
   },

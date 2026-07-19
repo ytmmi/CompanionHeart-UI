@@ -182,7 +182,7 @@ export async function getLLMStatus(): Promise<LLMStatus> {
 
 /**
  * 语音合成 — POST /api/voice/tts
- * 返回 MP3 音频 Blob
+ * 返回音频 Blob（EdgeTTS: MP3，GenieTTS 插件: WAV）
  */
 export async function synthesizeSpeech(
   text: string,
@@ -196,7 +196,7 @@ export async function synthesizeSpeech(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       text,
-      voice: options?.voice ?? "zh-CN-XiaoxiaoNeural",
+      ...(options?.voice ? { voice: options.voice } : {}),
     }),
     signal: options?.signal,
   });
@@ -214,7 +214,10 @@ export async function synthesizeSpeech(
 
 /**
  * 流式语音合成 — POST /api/voice/tts/stream
- * 逐 chunk 返回 Uint8Array 音频数据块
+ * 逐 chunk 返回 Uint8Array 音频数据块。
+ * 通过 response 头判断流格式：
+ *   Content-Type: audio/wav + X-Streaming: true → WAV 头 + PCM 真流式（GenieTTS 插件）
+ *   其他（audio/mpeg 或 X-Streaming: false）    → 需收集完整数据后解码播放
  */
 export function synthesizeSpeechStream(
   text: string,
@@ -233,7 +236,7 @@ export function synthesizeSpeechStream(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       text,
-      voice: options?.voice ?? "zh-CN-XiaoxiaoNeural",
+      ...(options?.voice ? { voice: options.voice } : {}),
     }),
     signal,
   });
@@ -274,11 +277,90 @@ export function synthesizeSpeechStream(
   return { stream, response: responsePromise };
 }
 
+/** 句子级同步流式合成的单句数据 */
+export interface SentenceChunk {
+  /** 句子文本 */
+  text: string;
+  /** base64 编码的 16-bit PCM @32kHz 单声道 */
+  audio: string;
+  /** 该句音频时长（毫秒） */
+  duration_ms: number;
+}
+
+/**
+ * 句子级同步流式合成 — POST /api/voice/tts/stream/sentences（NDJSON）
+ * 每句的文本与音频成对到达，用于语音-文字严格同步播放。
+ * 引擎不支持时后端返回 501，调用方应回退。
+ */
+export function synthesizeSpeechSentences(
+  text: string,
+  options?: { signal?: AbortSignal },
+): { stream: ReadableStream<SentenceChunk>; response: Promise<Response> } {
+  const responsePromise = fetch(`${API_BASE}/api/voice/tts/stream/sentences`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+    signal: options?.signal,
+  });
+
+  const stream = new ReadableStream<SentenceChunk>({
+    async start(controller) {
+      const resp = await responsePromise;
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        controller.error(
+          new Error(
+            (err as { detail?: string }).detail ??
+              `HTTP ${resp.status} ${resp.statusText}`,
+          ),
+        );
+        return;
+      }
+
+      const reader = resp.body?.getReader();
+      if (!reader) {
+        controller.error(new Error("响应体为空"));
+        return;
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+      const emit = (line: string) => {
+        const trimmed = line.trim();
+        if (!trimmed) return;
+        try {
+          controller.enqueue(JSON.parse(trimmed) as SentenceChunk);
+        } catch {
+          // 非 JSON 行跳过
+        }
+      };
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          for (const line of lines) emit(line);
+        }
+        emit(buffer);
+      } finally {
+        reader.releaseLock();
+        controller.close();
+      }
+    },
+  });
+
+  return { stream, response: responsePromise };
+}
+
 /** TTS 状态响应 */
 export interface TTSStatusResponse {
   engine: string;
   voices_count: number;
   streaming_supported: boolean;
+  sentence_stream_supported?: boolean;
 }
 
 /**
