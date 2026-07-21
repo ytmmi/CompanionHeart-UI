@@ -140,6 +140,9 @@ const PullCord: React.FC<PullCordProps> = ({
         animation: "pullcord-swing 3s ease-in-out infinite",
         cursor: "pointer",
         userSelect: "none",
+        // 触屏：禁用双击缩放（保证 dblclick 判定），并关闭点击高亮
+        touchAction: "manipulation",
+        WebkitTapHighlightColor: "transparent",
         ...style,
       }}
       onClick={handleClick}

@@ -863,9 +863,26 @@ export default function Live2DCanvas({
       };
       canvas.addEventListener("wheel", handleWheel, { passive: false });
 
-      // 8. 设置鼠标 + 触摸交互（含 hit test）
+      // 7b. 双指捏合缩放（Android 平板/手机）— 与滚轮缩放共用缩放状态与开关。
+      // 捏合为直接跟手（无平滑动画），开始捏合时停掉滚轮的缓动 rAF 防止互相覆盖
+      const zoomApi = {
+        getScale: () => currentScaleRef.current,
+        setScale: (scale: number) => {
+          const clamped = Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale));
+          if (scaleAnimRef.current !== null) {
+            cancelAnimationFrame(scaleAnimRef.current);
+            scaleAnimRef.current = null;
+          }
+          isScaleAnimatingRef.current = false;
+          currentScaleRef.current = clamped;
+          targetScaleRef.current = clamped;
+          applyModelScale(clamped);
+        },
+      };
+
+      // 8. 设置鼠标 + 触摸交互（含 hit test + 双指捏合缩放）
       l2dLog(id, "INIT", "设置鼠标/触摸/滚轮交互...");
-      const interactionCleanup = setupCanvasInteraction(canvas, ctrl);
+      const interactionCleanup = setupCanvasInteraction(canvas, ctrl, zoomApi);
       interactionCleanupRef.current = () => {
         interactionCleanup();
         wheelCleanup();
@@ -1284,14 +1301,22 @@ function setupDPRListener(
  * - 鼠标移动 → 视线追踪（focus）
  * - 点击（移动距离 < 阈值）→ hit test + 命中检测（tap）
  * - 拖拽（移动距离 ≥ 阈值）→ 视线拖拽
- * - 左键长按模型（≥ LONG_PRESS_MS）→ 拖动模型位置（开关：modelDragEnabled）
- * - 触摸 → 移动端交互（长按同样支持拖动模型）
+ * - 左键长按模型（≥ LONG_PRESS_MS）→ 拖动模型位置（仅鼠标，开关：modelDragEnabled）
+ * - 触摸单指 → 视线追踪 / 点击 tap（不支持长按拖动模型）
+ * - 触摸双指 → 间距变化缩放模型（开关同 wheelZoomEnabled）+
+ *   中心点移动平移模型（开关同 modelDragEnabled），两者同时生效
  * - 使用 _deviceToScreen 进行准确的坐标转换
  * - 鼠标/触摸结束 → 复位拖拽偏移
  */
+interface PinchZoomApi {
+  getScale: () => number;
+  setScale: (scale: number) => void;
+}
+
 function setupCanvasInteraction(
   canvas: HTMLCanvasElement,
   ctrl: NativeLive2DController,
+  zoomApi?: PinchZoomApi,
 ): () => void {
   let isDragging = false;
   let dragStartX = 0;
@@ -1303,6 +1328,25 @@ function setupCanvasInteraction(
   let isModelDragMode = false;
   /** 长按判定定时器 */
   let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 是否处于双指手势中（缩放 + 平移） */
+  let isPinching = false;
+  /** 捏合起始双指间距（px） */
+  let pinchStartDist = 0;
+  /** 捏合起始时的模型缩放值 */
+  let pinchStartScale = 1;
+  /** 双指中心点上次位置（px，用于平移增量） */
+  let pinchLastCX = 0;
+  let pinchLastCY = 0;
+
+  /** 双指间距（px） */
+  const touchDist = (t0: Touch, t1: Touch): number =>
+    Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+
+  /** 双指中心点（px） */
+  const touchCenter = (t0: Touch, t1: Touch): { x: number; y: number } => ({
+    x: (t0.clientX + t1.clientX) / 2,
+    y: (t0.clientY + t1.clientY) / 2,
+  });
 
   const clearLongPressTimer = () => {
     if (longPressTimer !== null) {
@@ -1387,7 +1431,7 @@ function setupCanvasInteraction(
     }
   };
 
-  const handleDown = (clientX: number, clientY: number) => {
+  const handleDown = (clientX: number, clientY: number, isTouch = false) => {
     isDragging = true;
     hasMoved = false;
     dragStartX = clientX;
@@ -1396,8 +1440,10 @@ function setupCanvasInteraction(
     lastY = clientY;
 
     // ── 长按判定：按住不动超过 LONG_PRESS_MS 且命中模型 → 进入拖动模型模式 ──
+    // 仅限鼠标；触屏的模型平移由双指手势承担（见 onTouchMove），不再用单指长按
     clearLongPressTimer();
     if (
+      !isTouch &&
       useLive2DStore.getState().modelDragEnabled &&
       hitTest(clientX, clientY) !== null
     ) {
@@ -1469,6 +1515,33 @@ function setupCanvasInteraction(
   // ── 触摸事件 ──
 
   const onTouchMove = (e: TouchEvent) => {
+    // ── 双指手势：间距比例 → 缩放；中心点位移 → 平移模型 ──
+    // 两者同时生效：间距几乎不变时缩放比例 ≈ 1（纯移动），
+    // 中心点不动时位移 ≈ 0（纯缩放），无需显式模式判定
+    if (isPinching && e.touches.length >= 2) {
+      const t0 = e.touches[0];
+      const t1 = e.touches[1];
+      // 缩放（开关同滚轮缩放）
+      if (zoomApi && useLive2DStore.getState().wheelZoomEnabled) {
+        const dist = touchDist(t0, t1);
+        if (pinchStartDist > 0) {
+          zoomApi.setScale(pinchStartScale * (dist / pinchStartDist));
+        }
+      }
+      // 平移（开关同长按拖动模型）
+      if (useLive2DStore.getState().modelDragEnabled) {
+        const center = touchCenter(t0, t1);
+        const prev = screenToModel(pinchLastCX, pinchLastCY);
+        const curr = screenToModel(center.x, center.y);
+        pinchLastCX = center.x;
+        pinchLastCY = center.y;
+        if (prev && curr) {
+          translateModelBy(curr.x - prev.x, curr.y - prev.y);
+        }
+      }
+      e.preventDefault();
+      return;
+    }
     if (e.touches.length === 0) return;
     const t = e.touches[0];
     handleMove(t.clientX, t.clientY);
@@ -1479,14 +1552,41 @@ function setupCanvasInteraction(
   };
 
   const onTouchStart = (e: TouchEvent) => {
-    if (e.touches.length === 0) return;
+    // ── 第二指落下 → 进入双指手势（缩放 + 平移）──
+    if (e.touches.length >= 2) {
+      isPinching = true;
+      const t0 = e.touches[0];
+      const t1 = e.touches[1];
+      pinchStartDist = touchDist(t0, t1);
+      pinchStartScale = zoomApi ? zoomApi.getScale() : 1;
+      const center = touchCenter(t0, t1);
+      pinchLastCX = center.x;
+      pinchLastCY = center.y;
+      // 取消单指状态：长按/拖拽/点击判定全部作废
+      clearLongPressTimer();
+      exitModelDragMode();
+      isDragging = false;
+      hasMoved = false;
+      const manager = LAppLive2DManager.getInstance();
+      if (manager) manager.onDrag(0, 0);
+      e.preventDefault();
+      return;
+    }
     const t = e.touches[0];
-    handleDown(t.clientX, t.clientY);
+    handleDown(t.clientX, t.clientY, true);
     // touchstart 不阻止默认行为，保留浏览器滚动能力
     // 若后续判定为拖拽，在 touchmove 中再阻止
   };
 
   const onTouchEnd = (e: TouchEvent) => {
+    // 双指手势中抬指：少于两指时结束手势；若仍剩一指，不恢复单指拖拽（需重新落指）
+    if (isPinching) {
+      if (e.touches.length < 2) {
+        isPinching = false;
+        pinchStartDist = 0;
+      }
+      return;
+    }
     const t = e.changedTouches[0];
     if (t) handleUp(t.clientX, t.clientY);
     else {
@@ -1498,6 +1598,8 @@ function setupCanvasInteraction(
   };
 
   const onTouchCancel = () => {
+    isPinching = false;
+    pinchStartDist = 0;
     clearLongPressTimer();
     exitModelDragMode();
     isDragging = false;

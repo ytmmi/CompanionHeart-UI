@@ -82,6 +82,33 @@ function l2dLogMiddleware(): Connect.NextHandleFunction {
   };
 }
 
+/**
+ * 生产构建瘦身：只保留默认 Live2D 模型
+ *
+ * public/ 会被 Vite 整体复制进 dist/，三个模型共 ~122MB。
+ * 构建结束后从 dist/live2d-models/ 删除未使用的备选模型目录，
+ * 只保留 BUNDLED_MODELS 中的模型（当前默认 akari，见 src/config/live2d/default.ts）。
+ * 仅作用于构建产物，不影响 public/ 源文件与开发模式（pnpm dev 所有模型可用）。
+ */
+const BUNDLED_MODELS = ["akari_vts"];
+
+function pruneLive2dModelsPlugin() {
+  return {
+    name: "prune-live2d-models",
+    apply: "build" as const,
+    closeBundle() {
+      const modelsDir = path.resolve(__dirname, "dist", "live2d-models");
+      if (!fs.existsSync(modelsDir)) return;
+      for (const entry of fs.readdirSync(modelsDir)) {
+        if (BUNDLED_MODELS.includes(entry)) continue;
+        const target = path.join(modelsDir, entry);
+        fs.rmSync(target, { recursive: true, force: true });
+        console.log(`[prune-live2d-models] 已从构建产物移除备选模型: ${entry}`);
+      }
+    },
+  };
+}
+
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   resolve: {
@@ -125,6 +152,7 @@ export default defineConfig(async () => ({
   // Live2D 日志中间件：接收前端日志写入本地文件
   plugins: [
     react(),
+    pruneLive2dModelsPlugin(),
     {
       name: "l2d-log-middleware",
       configureServer(server) {

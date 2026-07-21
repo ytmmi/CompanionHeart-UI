@@ -23,3 +23,13 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# 发布构建优化（性能优先）：
+# Rust 壳层只做窗口管理，渲染在 WebView 侧；opt-level=3 保证运行性能，
+# lto + codegen-units=1 + strip + panic=abort 同时显著压缩二进制体积
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
+

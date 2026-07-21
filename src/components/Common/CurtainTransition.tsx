@@ -8,8 +8,10 @@
 //     - top/bottom 层级在 left/right 之上（curtain 在最顶层）
 //   后半 展示：全部反向退出，露出下一个界面
 //
-// 前后两部分使用独立 keyframes（curtain-in-* / curtain-out-*）并在阶段切换时
-// 重建覆盖层 DOM（key=phase），保证界面切换（组件树重渲染）不会打断后半段动画。
+// 前后两部分使用独立 keyframes（curtain-in-* / curtain-out-*），阶段切换时仅改变
+// animation 名称即可重新触发动画（名称不同必然重启），不重建 DOM。
+// 覆盖层始终挂载（idle 时 visibility:hidden），保证四张大图在 WebView 中保持
+// 已解码状态 — 阶段切换若重建 <img>，Android WebView 需重新解码大图导致闪烁。
 //
 // 用法：
 //   - 组合调用：playCurtainTransition(() => { window.location.hash = "..." }, ready?)
@@ -185,6 +187,8 @@ const styles: Record<string, React.CSSProperties> = {
   // 右帘约 3.4%~97.9%），若按图片边缘各占 50% 相贴，中缝与屏幕边缘会露出界面。
   // 因此宽度放大到 55% 并向屏外偏移 2%，令闭合时中缝两侧的不透明像素互相搭接、
   // 屏幕外缘也由不透明像素覆盖（层级低于 top/bottom）
+  // willChange/backfaceVisibility：提升为独立合成层，避免 Android WebView
+  // 在动画期间反复栅格化大图导致闪烁
   left: {
     position: "absolute",
     top: "-2%",
@@ -193,6 +197,8 @@ const styles: Record<string, React.CSSProperties> = {
     height: "105%",
     objectFit: "fill",
     zIndex: 1,
+    willChange: "transform",
+    backfaceVisibility: "hidden",
   },
   right: {
     position: "absolute",
@@ -202,6 +208,8 @@ const styles: Record<string, React.CSSProperties> = {
     height: "105%",
     objectFit: "fill",
     zIndex: 1,
+    willChange: "transform",
+    backfaceVisibility: "hidden",
   },
   // 上下帘幔 — 全宽拉伸：上帘高占界面 1/10，下帘高占界面 1/8，贴顶/贴底（curtain 在最顶层）
   top: {
@@ -212,6 +220,8 @@ const styles: Record<string, React.CSSProperties> = {
     height: "10%",
     objectFit: "fill",
     zIndex: 2,
+    willChange: "transform",
+    backfaceVisibility: "hidden",
   },
   bottom: {
     position: "absolute",
@@ -221,6 +231,8 @@ const styles: Record<string, React.CSSProperties> = {
     height: "12.5%",
     objectFit: "fill",
     zIndex: 2,
+    willChange: "transform",
+    backfaceVisibility: "hidden",
   },
 };
 
@@ -231,14 +243,19 @@ const CurtainTransition: React.FC = () => {
     ensureCurtainKeyframes();
   }, []);
 
-  if (phase === "idle") return null;
+  // 覆盖层常驻挂载：idle 时仅隐藏（visibility）而非卸载。
+  // 阶段切换靠 animation 名称变化重启动画（cover/reveal 引用不同 keyframes），
+  // 不使用 key=phase 重建 DOM — 重建 <img> 会让 Android WebView 重新解码大图，
+  // 造成阶段衔接处闪烁（左右帘素材 1.7MB 尤为明显）
+  const hidden = phase === "idle";
 
   return (
-    // key=phase：阶段切换时重建 DOM，前/后半动画各自从头播放，
-    // 界面切换导致的组件树重渲染不会打断后半段
     <div
-      key={phase}
-      style={styles.overlay}
+      style={{
+        ...styles.overlay,
+        visibility: hidden ? "hidden" : "visible",
+        pointerEvents: hidden ? "none" : "auto",
+      }}
     >
       {/* 左右窗帘 — 从界面外左右进入，到中间刚好贴住 */}
       <img

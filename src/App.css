@@ -4,6 +4,9 @@
   margin: 0;
   padding: 0;
   box-sizing: border-box;
+  /* Android WebView 点击可交互元素时默认叠加半透明蓝色高亮，
+     覆盖元素整个盒模型（含图片透明像素），全局关闭 */
+  -webkit-tap-highlight-color: transparent;
 }
 
 html,
