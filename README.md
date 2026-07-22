@@ -2,7 +2,7 @@
 
 > AI 陪伴助手（AI Companion）多平台前端 · 基于 **Tauri 2.0 + React 19 + TypeScript**
 
-CompanionHeart-UI 是 AI 陪伴助手的前端应用，使用原生 **Cubism SDK for Web** 渲染 Live2D 虚拟形象，与 Python 后端（[CompanionHeart-Backend](../CompanionHeart-Backend/)）完全分离，通过 HTTP REST 通信。一套代码同时面向 **Windows 桌面、Web 浏览器、Android 手机 / 平板**。
+CompanionHeart-UI 是 AI 陪伴助手的前端应用，使用原生 **Cubism SDK for Web** 渲染 Live2D 虚拟形象，与 Python 后端（[CompanionHeart-Backend](https://github.com/ytmmi/CompanionHeart-Backend)）完全分离，通过 HTTP REST 通信。一套代码同时面向 **Windows 桌面、Web 浏览器、Android 手机 / 平板**。
 
 ---
 
@@ -19,16 +19,16 @@ CompanionHeart-UI 是 AI 陪伴助手的前端应用，使用原生 **Cubism SDK
 
 ## 🧱 技术栈
 
-| 类别     | 技术                        | 说明                              |
-| -------- | --------------------------- | --------------------------------- |
-| 桌面框架 | **Tauri 2.0**               | Rust 驱动的跨平台外壳             |
-| 前端框架 | **React 19**                | UI 组件                           |
-| 语言     | **TypeScript**              | 类型安全                         |
-| 构建工具 | **Vite**                    | 开发与打包                       |
-| 包管理   | **pnpm**                    | 依赖管理                         |
-| 状态管理 | **Zustand**                 | 轻量全局状态                     |
-| Live2D   | **原生 Cubism SDK for Web 5-r.5** | 虚拟形象渲染                |
-| 通信     | **HTTP REST**               | 与后端交互                       |
+| 类别     | 技术                              | 说明                  |
+| -------- | --------------------------------- | --------------------- |
+| 桌面框架 | **Tauri 2.0**                     | Rust 驱动的跨平台外壳 |
+| 前端框架 | **React 19**                      | UI 组件               |
+| 语言     | **TypeScript**                    | 类型安全              |
+| 构建工具 | **Vite**                          | 开发与打包            |
+| 包管理   | **pnpm**                          | 依赖管理              |
+| 状态管理 | **Zustand**                       | 轻量全局状态          |
+| Live2D   | **原生 Cubism SDK for Web 5-r.5** | 虚拟形象渲染          |
+| 通信     | **HTTP REST**                     | 与后端交互            |
 
 ---
 
@@ -68,7 +68,7 @@ pnpm tauri build        # 构建 Windows 发布版本（.exe / .msi）
 
 ## 🔌 连接后端
 
-前后端完全分离，后端项目位于 `../CompanionHeart-Backend/`：
+前后端完全分离，后端项目位于 [CompanionHeart-Backend](https://github.com/ytmmi/CompanionHeart-Backend)：
 
 ```bash
 cd ../CompanionHeart-Backend
