@@ -119,7 +119,7 @@ CompanionHeart-UI/
 
 ## 🙏 致谢
 
-- **Live2D 画布参考**：[Open-LLM-VTuber / Open-LLM-VTuber-Web](https://github.com/Open-LLM-VTuber/Open-LLM-VTuber-Web)
+- **Live2D 画布实现参考**：[Open-LLM-VTuber / Open-LLM-VTuber-Web](https://github.com/Open-LLM-VTuber/Open-LLM-VTuber-Web)
 - **Live2D 引擎**：[Live2D Cubism SDK for Web](https://www.live2d.com/download/cubism-sdk/download-web/)
 - [Tauri](https://tauri.app/) · [React](https://react.dev/) · [Vite](https://vitejs.dev/) · [Zustand](https://github.com/pmndrs/zustand)
 
@@ -127,6 +127,6 @@ CompanionHeart-UI/
 
 ## 📄 许可证
 
-本项目基于 [MIT License](./LICENSE) 开源。
+本项目基于 [GPL v3](./LICENSE) 开源。
 
 > Live2D Cubism SDK / Core 及各 Live2D 模型资产受 Live2D Inc. 各自的许可协议约束，不在本项目 MIT 许可范围内，使用前请遵循其官方授权条款。
