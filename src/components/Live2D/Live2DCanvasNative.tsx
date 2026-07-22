@@ -4,7 +4,7 @@
  * PLATFORM: 全平台通用（Win / Web / Android 平板 / Android 手机）
  * WebGL 渲染依赖设备 GPU 能力，Android 低端设备可能需要降级
  *
- * 替代原有的 pixi-live2d-display + PixiJS 方案，直接使用 Cubism SDK for Web。
+ * 直接使用原生 Cubism SDK for Web 渲染。
  * 参考 Open-LLM-VTuber 的架构：
  * - canvas 元素由 React 创建并管理
  * - 通过 LAppGlManager.setCanvas() 注入到 SDK

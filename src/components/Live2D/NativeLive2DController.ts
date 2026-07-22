@@ -1,7 +1,6 @@
 /**
  * NativeLive2DController — 基于原生 Cubism SDK 的 Live2D 控制器
  *
- * 替代原有的 pixi-live2d-display 版本 Live2DController。
  * 通过 LAppAdapter 封装 Cubism SDK 的模型操作，提供统一的控制器接口。
  *
  * 参考 Open-LLM-VTuber 的 LAppAdapter 架构：
