@@ -372,6 +372,36 @@ export async function getTTSStatus(): Promise<TTSStatusResponse> {
   return resp.json() as Promise<TTSStatusResponse>;
 }
 
+/** TTS 启用状态响应 */
+export interface TTSEnabledResponse {
+  enabled: boolean;
+}
+
+/**
+ * 查询 TTS 是否启用 — GET /api/voice/tts/enabled
+ */
+export async function getTTSEnabled(): Promise<boolean> {
+  const resp = await fetch(`${API_BASE}/api/voice/tts/enabled`);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const data = (await resp.json()) as TTSEnabledResponse;
+  return data.enabled;
+}
+
+/**
+ * 设置 TTS 启用/禁用 — POST /api/voice/tts/enabled
+ * 禁用后后端合成端点返回 403，不路由到 TTS 引擎。
+ */
+export async function setTTSEnabled(enabled: boolean): Promise<boolean> {
+  const resp = await fetch(`${API_BASE}/api/voice/tts/enabled`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  const data = (await resp.json()) as TTSEnabledResponse;
+  return data.enabled;
+}
+
 /**
  * 获取模型列表 — GET /api/llm/models
  */

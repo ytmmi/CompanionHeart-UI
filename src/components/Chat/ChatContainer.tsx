@@ -11,7 +11,9 @@ import React, { useState } from "react";
 import RoundedTriangle from "../Common/RoundedTriangle";
 import MicButton from "./MicButton";
 import MoreButton from "./MoreButton";
+import TtsToggleButton from "./TtsToggleButton";
 import { useChatStore } from "../../store/chatStore";
+import { usePlatform } from "../../hooks/usePlatform";
 import { initAudio } from "../../utils/audioUtils";
 
 /** 顶部展开/收缩栏高度（px），供使用方计算收缩后的容器高度 */
@@ -89,7 +91,8 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: "#fff",
     boxSizing: "border-box",
   },
-  // 发送按钮 — 长方形宽高比 21:10（缩放 2/3），圆角，底部与输入框底部对齐
+  // 发送按钮 — 长方形宽高比 21:10（缩放 2/3），圆角
+  // 默认（Win/Web）底部与输入框底部对齐；Android 构建时顶部与输入框上方平行
   sendBtn: {
     alignSelf: "flex-end",
     width: 50.4,
@@ -105,6 +108,11 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
     flexShrink: 0,
   },
+  // 发送按钮 — Android：与输入框上端平行（输入框上外边距 5px，此处对齐）
+  sendBtnAndroid: {
+    alignSelf: "flex-start",
+    margin: "5px 10px 0 5px",
+  },
   // 发送按钮 — 可发送（有内容且空闲）时高亮
   sendBtnActive: {
     backgroundColor: "#4A90D9",
@@ -119,6 +127,9 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
   // 非受控模式下的内部展开状态
   const [innerExpanded, setInnerExpanded] = useState(true);
   const isExpanded = expanded ?? innerExpanded;
+
+  // Android 构建时发送按钮与输入框上方平行（Win/Web 保持底部对齐）
+  const { isMobile } = usePlatform();
 
   /** 话筒开关（仅 UI 状态切换，实际功能待开发） */
   const [micOn, setMicOn] = useState(false);
@@ -171,13 +182,14 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
       <div style={styles.spacer} />
       {/* 第三层：输入控件层（输入框、发送等，从左到右排列） */}
       <div style={styles.inputBar}>
-        {/* 左侧控件列：话筒（上）+ 更多（下） */}
+        {/* 左侧控件列：更多（上）+ 话筒（中）+ 语音开关（下） */}
         <div style={styles.leftControls}>
+          <MoreButton />
           <MicButton
             on={micOn}
             onToggle={setMicOn}
           />
-          <MoreButton />
+          <TtsToggleButton />
         </div>
         {/* 输入框 */}
         <textarea
@@ -192,6 +204,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({
           type="button"
           style={{
             ...styles.sendBtn,
+            ...(isMobile ? styles.sendBtnAndroid : null),
             ...(canSend ? styles.sendBtnActive : null),
             cursor: canSend ? "pointer" : "default",
           }}

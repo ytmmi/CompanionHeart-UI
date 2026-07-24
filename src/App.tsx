@@ -4,6 +4,7 @@ import { usePlatform } from "./hooks/usePlatform";
 import HomePage from "./pages/HomePage";
 import PhoneHomePage from "./pages/PhoneHomePage";
 import MenuPage from "./pages/MenuPage";
+import DevGlobalSettingsPage from "./pages/DevGlobalSettingsPage";
 import Live2DHost from "./components/Live2D/Live2DHost";
 import CurtainTransition from "./components/Common/CurtainTransition";
 import TestLive2DPanel from "./components/test/TestLive2D/TestLive2DPanel";
@@ -14,6 +15,7 @@ import TestLive2DPanel from "./components/test/TestLive2D/TestLive2DPanel";
  * - Group A（Win / Web / Android 平板）→ HomePage（左右分栏布局）
  * - Group B（Android 手机）→ PhoneHomePage（窄屏触控布局）
  * - #/menu → MenuPage（菜单界面，首页单击默认状态拉绳进入）
+ * - #/dev/dev_global_settings → DevGlobalSettingsPage（开发全局持久化设置）
  * - #/testlive2d → TestLive2DPanel（Live2D 调试面板）
  *
  * Live2DHost 为 live2d展示 的常驻宿主：真实的背景 + Live2D 模型 + 拉绳
@@ -33,6 +35,11 @@ function App() {
   // 调试路由：#/testlive2d → Live2D 测试面板（独立环境，不挂载常驻宿主）
   if (hash === "#/testlive2d") {
     return <TestLive2DPanel />;
+  }
+
+  // 开发路由：#/dev/dev_global_settings → 开发全局设置（独立环境，不挂载常驻宿主）
+  if (hash === "#/dev/dev_global_settings") {
+    return <DevGlobalSettingsPage />;
   }
 
   // 菜单界面：#/menu → MenuPage（基于 父界面1）

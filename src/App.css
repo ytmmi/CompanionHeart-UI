@@ -24,3 +24,12 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+/* ── 隐藏原生滚动条（自定义滑动块的滚动容器使用，如聊天画布） ── */
+.ch-hide-scrollbar {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* 旧版 Edge/IE */
+}
+.ch-hide-scrollbar::-webkit-scrollbar {
+  display: none; /* Chrome / Safari / WebView */
+}

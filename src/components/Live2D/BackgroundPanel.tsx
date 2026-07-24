@@ -5,8 +5,9 @@ import React from "react";
 import Live2DCanvas from "./Live2DCanvasNative";
 import ModelBubbleOverlay from "./ModelBubbleOverlay";
 import type { ModelInfo } from "../../types/live2d";
-import { DEFAULT_MODEL_INFO } from "../../config/live2d";
+import { getModelByName } from "../../config/live2d";
 import { useChatStore } from "../../store/chatStore";
+import { useSettingsStore } from "../../store/settingsStore";
 
 const styles: Record<string, React.CSSProperties> = {
   container: {
@@ -44,16 +45,18 @@ const styles: Record<string, React.CSSProperties> = {
 
 const imgSrc = "/backgrounds/room/images/房间3.png";
 
-const modelConfig: ModelInfo = {
-  ...DEFAULT_MODEL_INFO,
-  kScale: 1.0,
-};
-
 const BackgroundPanel: React.FC = () => {
   /** 模型回复气泡文字（由聊天发送管线驱动） */
   const bubbleText = useChatStore((s) => s.bubbleText);
   /** 气泡是否处于淡出销毁动画中 */
   const bubbleClosing = useChatStore((s) => s.bubbleClosing);
+  /** 当前角色模型（dev_global_settings 角色设置可切换，切换时画布重新加载） */
+  const modelName = useSettingsStore((s) => s.modelName);
+
+  const modelConfig: ModelInfo = {
+    ...getModelByName(modelName),
+    kScale: 1.0,
+  };
 
   return (
     <div style={styles.container}>

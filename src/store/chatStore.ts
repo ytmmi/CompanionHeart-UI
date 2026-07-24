@@ -26,7 +26,9 @@ import {
   chat,
   synthesizeSpeech,
   synthesizeSpeechSentences,
+  setTTSEnabled as apiSetTTSEnabled,
 } from "../services/apiClient";
+import { useSettingsStore } from "./settingsStore";
 import type { ChatMessage } from "../services/apiClient";
 import { cleanTextForTTS } from "../utils/textCleaner";
 import {
@@ -225,11 +227,21 @@ export interface ChatState {
   bubbleClosing: boolean;
   /** 发送管线阶段 */
   phase: ChatPhase;
+  /** TTS 是否启用（前端控制，禁用时不请求语音，后端也不路由 TTS） */
+  ttsEnabled: boolean;
+  /** 最新一条助手回复已揭示的字符数（聊天画布打字机；TTS 启用时随语音推进） */
+  revealCount: number;
 
   /** 发送一条用户消息，走完 LLM → TTS → 同步播放全流程 */
   sendMessage: (text: string) => Promise<void>;
   /** 清空气泡（同时停止打字机与销毁定时器） */
   clearBubble: () => void;
+  /** 开启新对话：清空历史消息与气泡，停止播放中的语音 */
+  newChat: () => void;
+  /** 设置 TTS 启用/禁用（本地立即生效并持久化，同步到后端开关） */
+  setTtsEnabled: (enabled: boolean) => Promise<void>;
+  /** 将本地持久化的 TTS 启用状态推送到后端（应用启动时调用） */
+  syncTtsEnabled: () => Promise<void>;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -237,6 +249,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
   bubbleText: "",
   bubbleClosing: false,
   phase: "idle",
+  // 初始值来自持久化的全局设置（dev_global_settings）
+  ttsEnabled: useSettingsStore.getState().ttsEnabled,
+  revealCount: 0,
 
   sendMessage: async (text: string) => {
     const trimmed = text.trim();
@@ -269,6 +284,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       phase: "thinking",
       bubbleText: "……",
       bubbleClosing: false,
+      revealCount: 0,
       messages: [...s.messages, { role: "user", content: trimmed }],
     }));
 
@@ -302,9 +318,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const finishSpeaking = () => {
       stopTypewriter();
       stopAdaptiveTypewriter();
-      set({ bubbleText: lastSegment, phase: "idle" });
+      set({ bubbleText: lastSegment, phase: "idle", revealCount: reply.length });
       scheduleBubbleDismiss();
     };
+
+    // TTS 禁用：不请求语音（后端也不路由 TTS），文字一次性完整显示
+    if (!get().ttsEnabled) {
+      finishSpeaking();
+      return;
+    }
 
     /** 非流式回退：完整合成 → 按时长匀速打字 → 播放 */
     const fallbackNonStreaming = async () => {
@@ -328,7 +350,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           : FALLBACK_TYPE_SPEED_MS;
 
         startTypewriter(reply.length, speedMs, (count) =>
-          set({ bubbleText: displayAt(count) }),
+          set({ bubbleText: displayAt(count), revealCount: count }),
         );
         try {
           await playAudioBlob(audioBlob);
@@ -341,7 +363,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         startTypewriter(
           reply.length,
           FALLBACK_TYPE_SPEED_MS,
-          (count) => set({ bubbleText: displayAt(count) }),
+          (count) => set({ bubbleText: displayAt(count), revealCount: count }),
           () => {
             set({ phase: "idle" });
             scheduleBubbleDismiss();
@@ -387,13 +409,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
           const target = targetFor(value.text);
           tweenTypewriter(revealed, target, value.duration_ms, (count) => {
             revealed = count;
-            set({ bubbleText: displayAt(count) });
+            set({ bubbleText: displayAt(count), revealCount: count });
           });
           await playPcm(base64ToUint8(value.audio));
           // 该句播完：文字对齐到句末（tween 可能因取整差一两个字符）
           stopAdaptiveTypewriter();
           revealed = target;
-          set({ bubbleText: displayAt(target) });
+          set({ bubbleText: displayAt(target), revealCount: target });
           played++;
         }
       } finally {
@@ -418,5 +440,40 @@ export const useChatStore = create<ChatState>((set, get) => ({
     stopAdaptiveTypewriter();
     cancelBubbleDismiss();
     set({ bubbleText: "", bubbleClosing: false });
+  },
+
+  newChat: () => {
+    stopTypewriter();
+    stopAdaptiveTypewriter();
+    stopAudio();
+    cancelBubbleDismiss();
+    set({
+      messages: [],
+      bubbleText: "",
+      bubbleClosing: false,
+      phase: "idle",
+      revealCount: 0,
+    });
+  },
+
+  setTtsEnabled: async (enabled: boolean) => {
+    // 本地立即生效（禁用后 sendMessage 不再请求语音），并写入持久化全局设置
+    set({ ttsEnabled: enabled });
+    useSettingsStore.getState().updateSettings({ ttsEnabled: enabled });
+    // 同步到后端开关（失败不影响本地状态，后端仍会按参数拒绝路由）
+    try {
+      await apiSetTTSEnabled(enabled);
+    } catch (err) {
+      console.warn("[chatStore] 同步 TTS 启用状态到后端失败:", err);
+    }
+  },
+
+  syncTtsEnabled: async () => {
+    // 本地持久化设置为准，推送到后端（后端开关是进程内状态，重启后复位）
+    try {
+      await apiSetTTSEnabled(get().ttsEnabled);
+    } catch (err) {
+      console.warn("[chatStore] 推送 TTS 启用状态到后端失败:", err);
+    }
   },
 }));

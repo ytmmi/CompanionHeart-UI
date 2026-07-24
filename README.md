@@ -119,7 +119,7 @@ CompanionHeart-UI/
 
 ## 🙏 致谢
 
-- **Live2D 画布实现参考**：[Open-LLM-VTuber / Open-LLM-VTuber-Web](https://github.com/Open-LLM-VTuber/Open-LLM-VTuber-Web)
+- **Live2D 画布实现参考**：[Open-LLM-VTuber-Web](https://github.com/Open-LLM-VTuber/Open-LLM-VTuber-Web)
 - **Live2D 引擎**：[Live2D Cubism SDK for Web](https://www.live2d.com/download/cubism-sdk/download-web/)
 - [Tauri](https://tauri.app/) · [React](https://react.dev/) · [Vite](https://vitejs.dev/) · [Zustand](https://github.com/pmndrs/zustand)
 
